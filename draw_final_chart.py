@@ -16,7 +16,7 @@ from model_extractors import parse_target_string, ALL_FRIENDS
 from wolfram_classes import full_map
 
 # Configuration - modify these lists to add/remove models and datasets
-MODELS = ['gemini-2.5-pro', 'llama-3.3-70b', 'nemotron-32b', 'gemini-2.5-flash_thinking_budget_10000', 'gemini-2.5-flash_thinking_budget_0', 'qwen3-235B-no-reasoning', 'nemotron-7b']
+MODELS = ['gemini-2.5-pro', 'gemini-2.5-flash_thinking_budget_10000', 'gemini-2.5-flash_thinking_budget_0', 'llama-3.3-70b', 'nemotron-32b', 'nemotron-7b']
 DATASETS = ['r1s7T5', 'r2s20T10']
 
 # Color palette for different lines
@@ -446,9 +446,9 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
             baseline_scores = calculate_baseline_scores_from_dataset(dataset)
         
         # Create chart for this dataset
-        plt.figure(figsize=(8, 8))
+        plt.figure(figsize=(8, 6))
         
-        shifts = ['Shift 1', 'Shift 2', 'Shift 3', 'Shift 4']
+        shifts = [1, 2, 3, 4]
         color_idx = 0
         
         # Plot lines for each model in this dataset
@@ -470,19 +470,24 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
             else:
                 label = model
             
+            # Format model names - replace thinking budget patterns
+            label = label.replace('_thinking_budget_10000', ' (thinking budget 10000)')
+            label = label.replace('_thinking_budget_0', ' (thinking budget 0)')
+            
+            # Add thinking budget for gemini-2.5-pro
+            if label == 'gemini-2.5-pro':
+                label = 'gemini-2.5-pro (thinking budget 20000)'
+            
             color = COLORS[color_idx % len(COLORS)]
             marker = MARKERS[color_idx % len(MARKERS)]
             
             plt.plot(shifts, accuracies, 
-                    marker=marker, 
-                    linewidth=3, 
-                    markersize=8,
+                    marker='o', 
+                    linewidth=2, 
+                    markersize=6,
                     color=color,
-                    markerfacecolor=color,
-                    markeredgecolor='white',
-                    markeredgewidth=2,
                     label=label,
-                    alpha=0.8)
+                    zorder=3)
             
             # Value labels removed for cleaner visualization
             
@@ -512,26 +517,30 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
                     linewidth=2, 
                     color='red', 
                     alpha=0.7,
-                    label='Baseline (orbit[-1]=answer) × 0.8')
-        
-        # Customize the chart
-        plt.xlabel('Shift', fontsize=14, fontweight='bold')
-        plt.ylabel('Exact Match Accuracy', fontsize=14, fontweight='bold')
-        plt.ylim(0, y_max)
+                    label='Baseline (orbit[-1]=answer) × 0.8',
+                    zorder=2)
+        plt.title(f'{dataset}', fontsize=14, fontweight='bold')
         
         # Add grid for better readability
-        plt.grid(True, alpha=0.3, linestyle='--')
+        plt.grid(True, zorder=0, alpha=0.3)
+        
+        # Customize the chart
+        plt.xlabel("Look-ahead, steps", fontsize=12)
+        plt.ylabel("Exact match", fontsize=12)
+        # plt.ylim(0, 1.0)
         
         # Customize axes
-        plt.xticks(fontsize=12)
+        plt.xticks([1, 2, 3, 4], fontsize=12)
         plt.yticks(fontsize=12)
         
         # Add legend above the chart with proper spacing
-        plt.legend(bbox_to_anchor=(0.5, 1.05), loc='lower center', ncol=2, fontsize=12, framealpha=0.9)
+        plt.legend(fontsize=11, loc='lower center',
+                  bbox_to_anchor=(0.5, 1.03),
+                  ncol=3,
+                  frameon=False)
         
-        # Adjust layout with more space for legend
+        # Adjust layout
         plt.tight_layout()
-        plt.subplots_adjust(top=0.9)
         
         # Save the chart with dataset name in both PDF and SVG formats
         suffix = "_hard" if only_hard_classes else ""

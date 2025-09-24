@@ -371,7 +371,7 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
     subsets = sorted(subsets, key=lambda x: (0 if x == 'r1s7T5' else 1))
     models = list(set(result['model'] for result in analysis_results))
     
-    fig, axes = plt.subplots(1, len(subsets), figsize=(9 * len(subsets), 8))
+    fig, axes = plt.subplots(1, len(subsets), figsize=(9, 8))
     if len(subsets) == 1:
         axes = [axes]
     
@@ -385,16 +385,29 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
         
         # Prepare data for plotting
         x = np.arange(len(all_classes))
-        width = 0.8 / len(subset_results)
+        n_cats = len(subset_results)
+        bar_width = 0.7 / n_cats  # Adjusted bar width for spacing between bars
+        group_spacing = 0.2  # Space between groups of bars
         
         for model_idx, result in enumerate(subset_results):
             model = result['model']
             accuracies = [result['class_accuracies'].get(cls, 0) for cls in all_classes]
             baseline_ratios = [result['class_baseline_ratios'].get(cls, 0) for cls in all_classes]
             
+            # Format model name for legend
+            model_label = model.replace('_thinking_budget_10000', ' (thinking budget 10000)')
+            model_label = model_label.replace('_thinking_budget_0', ' (thinking budget 0)')
+            
+            # Add thinking budget for gemini-2.5-pro
+            if model_label == 'gemini-2.5-pro':
+                model_label = 'gemini-2.5-pro (thinking budget 20000)'
+            
+            # Calculate bar positions with gaps
+            positions = x + model_idx * (bar_width + group_spacing / n_cats) - (n_cats - 1) * (bar_width + group_spacing / n_cats) / 2
+            
             # Create bars
-            bars = ax.bar(x + model_idx * width, accuracies, width, 
-                         label=f"{model}", 
+            bars = ax.bar(positions, accuracies, bar_width, 
+                         label=model_label, 
                          color=colors[model_idx % len(colors)],
                          alpha=0.8)
             
@@ -409,25 +422,26 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
             baseline_ratios_scaled = [val * 0.8 for val in baseline_ratios]
             # Create extended x-coordinates to cover full width
             # Calculate the full width of bar groups
-            total_bar_width = width * len(subset_results)
-            bar_centers = x + width * (len(subset_results) - 1) / 2
+            total_bar_width = (bar_width + group_spacing / n_cats) * n_cats
+            bar_centers = x
             x_stairs = np.concatenate([[bar_centers[0] - total_bar_width/2], bar_centers, [bar_centers[-1] + total_bar_width/2]])
             baseline_stairs = np.concatenate([[baseline_ratios_scaled[0]], baseline_ratios_scaled, [baseline_ratios_scaled[-1]]])
             ax.step(x_stairs, baseline_stairs, 
                    'r--', linewidth=2, alpha=0.7, label='Baseline (orbit[-1]=answer) × 0.8', where='mid')
         
         # Customize subplot
-        ax.set_xlabel('Wolfram Complexity Class', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Exact Match Accuracy', fontsize=12, fontweight='bold')
-        ax.set_xticks(x + width * (len(subset_results) - 1) / 2)
-        ax.set_xticklabels([f'Class {cls}' for cls in all_classes])
+        ax.set_xlabel("Wolfram Complexity Class", fontsize=14)
+        ax.set_ylabel("Exact match", fontsize=14)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'Class {cls}' for cls in all_classes], fontsize=12)
         ax.set_ylim(0, 1.0)
-        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.grid(zorder=0)
         ax.legend(bbox_to_anchor=(0.5, 1.05), loc='lower center', ncol=2, fontsize=12, framealpha=0.9)
     
     # No title for cleaner appearance
     
     plt.tight_layout()
+    
     # Save in both PDF and SVG formats
     output_file_pdf = output_file.replace('.pdf', '.pdf')
     output_file_svg = output_file.replace('.pdf', '.svg')
@@ -472,7 +486,7 @@ if __name__ == "__main__":
     # Determine which models and subsets to analyze
     if args.all_models:
         # Analyze all combinations (only radius 1 subsets for Wolfram classification)
-        models = ['gemini-2.5-pro',  'gemini-2.5-flash_thinking_budget_10000', 'gemini-2.5-flash_thinking_budget_0', 'llama-3.3-70b', 'nemotron-32b', 'nemotron-7b', 'qwen3-235B-no-reasoning',]
+        models = ['gemini-2.5-pro',  'gemini-2.5-flash_thinking_budget_10000', 'gemini-2.5-flash_thinking_budget_0', 'llama-3.3-70b', 'nemotron-32b', 'nemotron-7b',]
     else:
         models = [args.model]
     
