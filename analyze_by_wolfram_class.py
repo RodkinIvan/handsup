@@ -371,7 +371,7 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
     subsets = sorted(subsets, key=lambda x: (0 if x == 'r1s7T5' else 1))
     models = list(set(result['model'] for result in analysis_results))
     
-    fig, axes = plt.subplots(1, len(subsets), figsize=(6 * len(subsets), 8))
+    fig, axes = plt.subplots(1, len(subsets), figsize=(9 * len(subsets), 8))
     if len(subsets) == 1:
         axes = [axes]
     
@@ -398,39 +398,42 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
                          color=colors[model_idx % len(colors)],
                          alpha=0.8)
             
-            # Add value labels on bars
-            for bar, acc in zip(bars, accuracies):
-                if acc > 0:
-                    height = bar.get_height()
-                    ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                           f'{acc:.2f}', ha='center', va='bottom', fontsize=9)
+            # Value labels removed for cleaner visualization
         
         # Add baseline line for the first model (they should be the same for all models in same dataset)
         if subset_results:
             first_result = subset_results[0]
             baseline_ratios = [first_result['class_baseline_ratios'].get(cls, 0) for cls in all_classes]
             
-            # Plot baseline line
-            ax.plot(x + width * (len(subset_results) - 1) / 2, baseline_ratios, 
-                   'r--', linewidth=2, alpha=0.7, label='Baseline (orbit=answer)')
+            # Plot baseline stairs (scaled by 0.8) - extend from left to right edge
+            baseline_ratios_scaled = [val * 0.8 for val in baseline_ratios]
+            # Create extended x-coordinates to cover full width
+            # Calculate the full width of bar groups
+            total_bar_width = width * len(subset_results)
+            bar_centers = x + width * (len(subset_results) - 1) / 2
+            x_stairs = np.concatenate([[bar_centers[0] - total_bar_width/2], bar_centers, [bar_centers[-1] + total_bar_width/2]])
+            baseline_stairs = np.concatenate([[baseline_ratios_scaled[0]], baseline_ratios_scaled, [baseline_ratios_scaled[-1]]])
+            ax.step(x_stairs, baseline_stairs, 
+                   'r--', linewidth=2, alpha=0.7, label='Baseline (orbit[-1]=answer) × 0.8', where='mid')
         
         # Customize subplot
         ax.set_xlabel('Wolfram Complexity Class', fontsize=12, fontweight='bold')
         ax.set_ylabel('Exact Match Accuracy', fontsize=12, fontweight='bold')
-        ax.set_title(f'{subset}', fontsize=14, fontweight='bold')
         ax.set_xticks(x + width * (len(subset_results) - 1) / 2)
         ax.set_xticklabels([f'Class {cls}' for cls in all_classes])
         ax.set_ylim(0, 1.0)
         ax.grid(True, alpha=0.3, linestyle='--')
-        ax.legend()
+        ax.legend(bbox_to_anchor=(0.5, 1.05), loc='lower center', ncol=2, fontsize=12, framealpha=0.9)
     
-    # Overall title
-    fig.suptitle('Handsup Game: Accuracy by Wolfram Complexity Class', 
-                 fontsize=16, fontweight='bold', y=0.98)
+    # No title for cleaner appearance
     
     plt.tight_layout()
-    plt.savefig(output_file, bbox_inches='tight')
-    print(f"\nComplexity class analysis chart saved as: {output_file}")
+    # Save in both PDF and SVG formats
+    output_file_pdf = output_file.replace('.pdf', '.pdf')
+    output_file_svg = output_file.replace('.pdf', '.svg')
+    plt.savefig(output_file_pdf, bbox_inches='tight')
+    plt.savefig(output_file_svg, bbox_inches='tight')
+    print(f"\nComplexity class analysis chart saved as: {output_file_pdf} and {output_file_svg}")
     plt.show()
     
     # Print summary statistics
@@ -448,7 +451,8 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
         for cls in sorted(class_accuracies.keys(), key=lambda x: (0 if x == 'Unknown' else x)):
             if cls != 'Unknown':
                 baseline_ratio = class_baseline_ratios.get(cls, 0.0)
-                print(f"  Class {cls}: {class_accuracies[cls]:.3f} (baseline: {baseline_ratio:.3f})")
+                baseline_ratio_scaled = baseline_ratio * 0.8
+                print(f"  Class {cls}: {class_accuracies[cls]:.3f} (baseline: {baseline_ratio:.3f} × 0.8 = {baseline_ratio_scaled:.3f})")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Analyze handsup dataset performance by Wolfram complexity classes')
@@ -468,7 +472,7 @@ if __name__ == "__main__":
     # Determine which models and subsets to analyze
     if args.all_models:
         # Analyze all combinations (only radius 1 subsets for Wolfram classification)
-        models = ['gemini-2.5-pro', 'llama-3.3-70b', 'nemotron-32b']
+        models = ['gemini-2.5-pro',  'gemini-2.5-flash_thinking_budget_10000', 'gemini-2.5-flash_thinking_budget_0', 'llama-3.3-70b', 'nemotron-32b', 'nemotron-7b', 'qwen3-235B-no-reasoning',]
     else:
         models = [args.model]
     

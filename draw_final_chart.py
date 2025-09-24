@@ -16,7 +16,7 @@ from model_extractors import parse_target_string, ALL_FRIENDS
 from wolfram_classes import full_map
 
 # Configuration - modify these lists to add/remove models and datasets
-MODELS = ['gemini-2.5-pro', 'llama-3.3-70b', 'nemotron-32b']
+MODELS = ['gemini-2.5-pro', 'llama-3.3-70b', 'nemotron-32b', 'gemini-2.5-flash_thinking_budget_10000', 'gemini-2.5-flash_thinking_budget_0', 'qwen3-235B-no-reasoning', 'nemotron-7b']
 DATASETS = ['r1s7T5', 'r2s20T10']
 
 # Color palette for different lines
@@ -446,7 +446,7 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
             baseline_scores = calculate_baseline_scores_from_dataset(dataset)
         
         # Create chart for this dataset
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(8, 8))
         
         shifts = ['Shift 1', 'Shift 2', 'Shift 3', 'Shift 4']
         color_idx = 0
@@ -465,7 +465,7 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
                     accuracies.append(0.0)
             
             # Create label with model and extraction method
-            if extraction_method and extraction_method != 'rule-based':
+            if extraction_method and extraction_method != 'rule-based' and 'gemma3' not in extraction_method:
                 label = f"{model} ({extraction_method})"
             else:
                 label = model
@@ -484,17 +484,7 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
                     label=label,
                     alpha=0.8)
             
-            # Add value labels on data points
-            for i, accuracy in enumerate(accuracies):
-                if accuracy > 0:  # Only show labels for non-zero values
-                    plt.annotate(f'{accuracy:.3f}', 
-                                (i, accuracy), 
-                                textcoords="offset points", 
-                                xytext=(0,15), 
-                                ha='center', 
-                                fontweight='bold',
-                                fontsize=10,
-                                bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.8, edgecolor='gray'))
+            # Value labels removed for cleaner visualization
             
             color_idx += 1
         
@@ -515,17 +505,16 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
             for shift in ['shift_1', 'shift_2', 'shift_3', 'shift_4']:
                 baseline_values.append(baseline_scores.get(shift, 0.0))
             
-            # Plot baseline dash line
-            plt.plot(shifts, baseline_values, 
+            # Plot baseline dash line (scaled by 0.8)
+            baseline_values_scaled = [val * 0.8 for val in baseline_values]
+            plt.plot(shifts, baseline_values_scaled, 
                     linestyle='--', 
                     linewidth=2, 
                     color='red', 
                     alpha=0.7,
-                    label='Baseline (orbit=answer)')
+                    label='Baseline (orbit[-1]=answer) × 0.8')
         
         # Customize the chart
-        title_prefix = "Hard Handsup Game" if only_hard_classes else "Handsup Game"
-        plt.title(f'{title_prefix}: Exact Match Accuracy by Shift - {dataset}', fontsize=18, fontweight='bold', pad=30)
         plt.xlabel('Shift', fontsize=14, fontweight='bold')
         plt.ylabel('Exact Match Accuracy', fontsize=14, fontweight='bold')
         plt.ylim(0, y_max)
@@ -538,17 +527,19 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
         plt.yticks(fontsize=12)
         
         # Add legend above the chart with proper spacing
-        plt.legend(bbox_to_anchor=(0.5, 1.15), loc='lower center', ncol=2, fontsize=12, framealpha=0.9)
+        plt.legend(bbox_to_anchor=(0.5, 1.05), loc='lower center', ncol=2, fontsize=12, framealpha=0.9)
         
         # Adjust layout with more space for legend
         plt.tight_layout()
-        plt.subplots_adjust(top=0.85)
+        plt.subplots_adjust(top=0.9)
         
-        # Save the chart with dataset name
+        # Save the chart with dataset name in both PDF and SVG formats
         suffix = "_hard" if only_hard_classes else ""
-        output_file = f"{output_prefix}_{dataset}{suffix}.pdf"
-        plt.savefig(output_file, bbox_inches='tight')
-        print(f"\nChart for {dataset} saved as: {output_file}")
+        output_file_pdf = f"{output_prefix}_{dataset}{suffix}.pdf"
+        output_file_svg = f"{output_prefix}_{dataset}{suffix}.svg"
+        plt.savefig(output_file_pdf, bbox_inches='tight')
+        plt.savefig(output_file_svg, bbox_inches='tight')
+        print(f"\nChart for {dataset} saved as: {output_file_pdf} and {output_file_svg}")
         
         # Show the chart
         plt.show()
@@ -573,7 +564,8 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
         for shift in ['shift_1', 'shift_2', 'shift_3', 'shift_4']:
             if shift in shift_metrics:
                 baseline_val = baseline_scores.get(shift, 0.0) if baseline_scores else 0.0
-                print(f"  {shift.replace('_', ' ').title()}: {shift_metrics[shift]['accuracy']:.3f} (baseline: {baseline_val:.3f})")
+                baseline_val_scaled = baseline_val * 0.8
+                print(f"  {shift.replace('_', ' ').title()}: {shift_metrics[shift]['accuracy']:.3f} (baseline: {baseline_val:.3f} × 0.8 = {baseline_val_scaled:.3f})")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Create combined accuracy chart for multiple models and datasets')
