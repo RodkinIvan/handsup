@@ -15,6 +15,84 @@ import os
 import datasets
 from wolfram_classes import full_map
 from model_extractors import parse_target_string, ALL_FRIENDS
+from statsmodels.stats.proportion import proportion_confint
+from scipy.stats import bootstrap
+
+def calculate_confidence_interval_wilson(predictions, targets, confidence_level=0.95):
+    """Calculate confidence interval for exact match accuracy using Wilson method."""
+    if len(predictions) != len(targets):
+        raise ValueError("Predictions and targets must have the same length")
+    
+    # Count exact matches (binary: 1 for match, 0 for no match)
+    matches = []
+    for pred, target in zip(predictions, targets):
+        if pred == target:
+            matches.append(1)
+        else:
+            matches.append(0)
+    
+    if not matches:
+        return 0.0, 0.0, 0.0  # accuracy, lower_bound, upper_bound
+    
+    matches_array = np.array(matches)
+    count = matches_array.sum()
+    nobs = len(matches_array)
+    
+    # Calculate accuracy
+    accuracy = count / nobs
+    
+    # Calculate Wilson confidence interval
+    alpha = 1 - confidence_level
+    lo, hi = proportion_confint(count=count, nobs=nobs, alpha=alpha, method="wilson")
+    
+    return accuracy, lo, hi
+
+def calculate_confidence_interval_bootstrap(predictions, targets, confidence_level=0.95):
+    """Calculate confidence interval for exact match accuracy using bootstrap method."""
+    if len(predictions) != len(targets):
+        raise ValueError("Predictions and targets must have the same length")
+    
+    # Count exact matches (binary: 1 for match, 0 for no match)
+    matches = []
+    for pred, target in zip(predictions, targets):
+        if pred == target:
+            matches.append(1)
+        else:
+            matches.append(0)
+    
+    if not matches:
+        return 0.0, 0.0, 0.0  # accuracy, lower_bound, upper_bound
+    
+    matches_array = np.array(matches)
+    
+    # Calculate accuracy
+    accuracy = matches_array.mean()
+    
+    # Bootstrap confidence interval
+    res = bootstrap((matches_array,), np.mean, confidence_level=confidence_level, 
+                   n_resamples=10000, method="BCa", random_state=0)
+    lo, hi = res.confidence_interval.low, res.confidence_interval.high
+    
+    return accuracy, lo, hi
+
+def calculate_confidence_interval(predictions, targets, confidence_level=0.95, method="wilson"):
+    """Calculate confidence interval for exact match accuracy.
+    
+    Args:
+        predictions: List of predicted binary strings
+        targets: List of target binary strings  
+        confidence_level: Confidence level (default 0.95 for 95%)
+        method: Either "wilson" or "bootstrap"
+    
+    Returns:
+        tuple: (accuracy, lower_bound, upper_bound)
+    """
+    if method == "wilson":
+        return calculate_confidence_interval_wilson(predictions, targets, confidence_level)
+    elif method == "bootstrap":
+        return calculate_confidence_interval_bootstrap(predictions, targets, confidence_level)
+    else:
+        raise ValueError("Method must be either 'wilson' or 'bootstrap'")
 
 def extract_rule_from_table(rule_table):
     """Extract the ECA rule number from the rule table string."""
@@ -317,6 +395,7 @@ def analyze_by_complexity_class(subset, model, data_dir="handsup_evals"):
     # Calculate accuracy by complexity class
     class_accuracies = defaultdict(list)
     class_sample_counts = defaultdict(int)
+    class_binary_data = defaultdict(lambda: {'predictions': [], 'targets': []})  # Store binary data for CI calculation
     
     for shift in ['shift_1', 'shift_2', 'shift_3', 'shift_4']:
         for sample in combined_data[shift]:
@@ -329,6 +408,10 @@ def analyze_by_complexity_class(subset, model, data_dir="handsup_evals"):
             
             class_accuracies[complexity_class].append(is_correct)
             class_sample_counts[complexity_class] += 1
+            
+            # Store binary data for confidence interval calculation
+            class_binary_data[complexity_class]['predictions'].append(sample['pred_binary'])
+            class_binary_data[complexity_class]['targets'].append(sample['target_binary'])
     
     # Calculate average accuracy per class
     class_avg_accuracies = {}
@@ -349,10 +432,11 @@ def analyze_by_complexity_class(subset, model, data_dir="handsup_evals"):
         'extraction_method': extraction_method,
         'class_accuracies': class_avg_accuracies,
         'class_baseline_ratios': class_baseline_ratios,
-        'class_sample_counts': class_sample_counts
+        'class_sample_counts': class_sample_counts,
+        'class_binary_data': class_binary_data
     }
 
-def create_complexity_class_chart(analysis_results, output_file="handsup_complexity.pdf"):
+def create_complexity_class_chart(analysis_results, output_file="handsup_complexity.pdf", ci_method="wilson"):
     """Create bar charts showing accuracy by complexity class for each model."""
     
     if not analysis_results:
@@ -391,7 +475,32 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
         
         for model_idx, result in enumerate(subset_results):
             model = result['model']
-            accuracies = [result['class_accuracies'].get(cls, 0) for cls in all_classes]
+            class_binary_data = result['class_binary_data']
+            
+            # Calculate accuracies and confidence intervals for each class
+            accuracies = []
+            errors_lower = []
+            errors_upper = []
+            
+            for cls in all_classes:
+                if cls in class_binary_data:
+                    predictions = class_binary_data[cls]['predictions']
+                    targets = class_binary_data[cls]['targets']
+                    
+                    if predictions and targets:
+                        accuracy, lo, hi = calculate_confidence_interval(predictions, targets, method=ci_method)
+                        accuracies.append(accuracy)
+                        errors_lower.append(accuracy - lo)
+                        errors_upper.append(hi - accuracy)
+                    else:
+                        accuracies.append(0.0)
+                        errors_lower.append(0.0)
+                        errors_upper.append(0.0)
+                else:
+                    accuracies.append(0.0)
+                    errors_lower.append(0.0)
+                    errors_upper.append(0.0)
+            
             baseline_ratios = [result['class_baseline_ratios'].get(cls, 0) for cls in all_classes]
             
             # Format model name for legend
@@ -405,11 +514,15 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
             # Calculate bar positions with gaps
             positions = x + model_idx * (bar_width + group_spacing / n_cats) - (n_cats - 1) * (bar_width + group_spacing / n_cats) / 2
             
-            # Create bars
+            # Create bars with error bars
             bars = ax.bar(positions, accuracies, bar_width, 
+                         yerr=[errors_lower, errors_upper],
                          label=model_label, 
                          color=colors[model_idx % len(colors)],
-                         alpha=0.8)
+                         alpha=0.8,
+                         capsize=0,
+                         error_kw={'elinewidth': 2},
+                         zorder=3)
             
             # Value labels removed for cleaner visualization
         
@@ -430,13 +543,13 @@ def create_complexity_class_chart(analysis_results, output_file="handsup_complex
                    'r--', linewidth=2, alpha=0.7, label='Baseline (orbit[-1]=answer) × 0.8', where='mid')
         
         # Customize subplot
-        ax.set_xlabel("Wolfram Complexity Class", fontsize=14)
-        ax.set_ylabel("Exact match", fontsize=14)
+        ax.set_xlabel("Wolfram Complexity Class", fontsize=16)
+        ax.set_ylabel("Exact match", fontsize=16)
         ax.set_xticks(x)
-        ax.set_xticklabels([f'Class {cls}' for cls in all_classes], fontsize=12)
+        ax.set_xticklabels([f'Class {cls}' for cls in all_classes], fontsize=14)
         ax.set_ylim(0, 1.0)
         ax.grid(zorder=0)
-        ax.legend(bbox_to_anchor=(0.5, 1.05), loc='lower center', ncol=2, fontsize=12, framealpha=0.9)
+        ax.legend(bbox_to_anchor=(0.5, 1.05), loc='lower center', ncol=2, fontsize=14, framealpha=0.9)
     
     # No title for cleaner appearance
     
@@ -480,6 +593,8 @@ if __name__ == "__main__":
                        help='Output filename for the chart (default: handsup_complexity.pdf)')
     parser.add_argument('--all_models', action='store_true',
                        help='Analyze all available models')
+    parser.add_argument('--ci_method', type=str, choices=['wilson', 'bootstrap'], default='bootstrap',
+                       help='Confidence interval method: wilson (default) or bootstrap')
     
     args = parser.parse_args()
     
@@ -512,6 +627,6 @@ if __name__ == "__main__":
     
     # Create combined chart
     if analysis_results:
-        create_complexity_class_chart(analysis_results, args.output)
+        create_complexity_class_chart(analysis_results, args.output, args.ci_method)
     else:
         print("No analysis results to plot")

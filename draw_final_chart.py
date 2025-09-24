@@ -14,6 +14,84 @@ import os
 import datasets
 from model_extractors import parse_target_string, ALL_FRIENDS
 from wolfram_classes import full_map
+from statsmodels.stats.proportion import proportion_confint
+from scipy.stats import bootstrap
+
+def calculate_confidence_interval_wilson(predictions, targets, confidence_level=0.95):
+    """Calculate confidence interval for exact match accuracy using Wilson method."""
+    if len(predictions) != len(targets):
+        raise ValueError("Predictions and targets must have the same length")
+    
+    # Count exact matches (binary: 1 for match, 0 for no match)
+    matches = []
+    for pred, target in zip(predictions, targets):
+        if pred == target:
+            matches.append(1)
+        else:
+            matches.append(0)
+    
+    if not matches:
+        return 0.0, 0.0, 0.0  # accuracy, lower_bound, upper_bound
+    
+    matches_array = np.array(matches)
+    count = matches_array.sum()
+    nobs = len(matches_array)
+    
+    # Calculate accuracy
+    accuracy = count / nobs
+    
+    # Calculate Wilson confidence interval
+    alpha = 1 - confidence_level
+    lo, hi = proportion_confint(count=count, nobs=nobs, alpha=alpha, method="wilson")
+    
+    return accuracy, lo, hi
+
+def calculate_confidence_interval_bootstrap(predictions, targets, confidence_level=0.95):
+    """Calculate confidence interval for exact match accuracy using bootstrap method."""
+    if len(predictions) != len(targets):
+        raise ValueError("Predictions and targets must have the same length")
+    
+    # Count exact matches (binary: 1 for match, 0 for no match)
+    matches = []
+    for pred, target in zip(predictions, targets):
+        if pred == target:
+            matches.append(1)
+        else:
+            matches.append(0)
+    
+    if not matches:
+        return 0.0, 0.0, 0.0  # accuracy, lower_bound, upper_bound
+    
+    matches_array = np.array(matches)
+    
+    # Calculate accuracy
+    accuracy = matches_array.mean()
+    
+    # Bootstrap confidence interval
+    res = bootstrap((matches_array,), np.mean, confidence_level=confidence_level, 
+                   n_resamples=10000, method="BCa", random_state=0)
+    lo, hi = res.confidence_interval.low, res.confidence_interval.high
+    
+    return accuracy, lo, hi
+
+def calculate_confidence_interval(predictions, targets, confidence_level=0.95, method="wilson"):
+    """Calculate confidence interval for exact match accuracy.
+    
+    Args:
+        predictions: List of predicted binary strings
+        targets: List of target binary strings  
+        confidence_level: Confidence level (default 0.95 for 95%)
+        method: Either "wilson" or "bootstrap"
+    
+    Returns:
+        tuple: (accuracy, lower_bound, upper_bound)
+    """
+    if method == "wilson":
+        return calculate_confidence_interval_wilson(predictions, targets, confidence_level)
+    elif method == "bootstrap":
+        return calculate_confidence_interval_bootstrap(predictions, targets, confidence_level)
+    else:
+        raise ValueError("Method must be either 'wilson' or 'bootstrap'")
 
 # Configuration - modify these lists to add/remove models and datasets
 MODELS = ['gemini-2.5-pro', 'gemini-2.5-flash_thinking_budget_10000', 'gemini-2.5-flash_thinking_budget_0', 'llama-3.3-70b', 'nemotron-32b', 'nemotron-7b']
@@ -333,6 +411,7 @@ def analyze_single_file(file_path, only_hard_classes=False, dataset_name=None):
     all_predictions = []
     all_targets = []
     shift_metrics = {}
+    shift_binary_data = {}  # Store binary predictions and targets for each shift
     
     for shift in ['shift_1', 'shift_2', 'shift_3', 'shift_4']:
         shift_predictions = []
@@ -374,6 +453,12 @@ def analyze_single_file(file_path, only_hard_classes=False, dataset_name=None):
                 shift_predictions.append(pred_binary)
                 shift_targets.append(target_binary)
         
+        # Store binary data for confidence interval calculation
+        shift_binary_data[shift] = {
+            'predictions': shift_predictions,
+            'targets': shift_targets
+        }
+        
         # Compute metrics for this shift
         if shift_predictions:
             metrics = compute_metrics(shift_predictions, shift_targets, num_friends)
@@ -381,9 +466,9 @@ def analyze_single_file(file_path, only_hard_classes=False, dataset_name=None):
             all_predictions.extend(shift_predictions)
             all_targets.extend(shift_targets)
     
-    return shift_metrics, num_friends, filename, extraction_method
+    return shift_metrics, num_friends, filename, extraction_method, shift_binary_data
 
-def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", only_hard_classes=False):
+def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", only_hard_classes=False, ci_method="wilson"):
     """Create separate charts for each dataset showing accuracy across multiple models"""
     
     # Collect data for all model-dataset combinations
@@ -408,7 +493,7 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
             
             if file_path:
                 print(f"Processing: {file_path}")
-                shift_metrics, num_friends, filename, extraction_method = analyze_single_file(file_path, only_hard_classes, dataset)
+                shift_metrics, num_friends, filename, extraction_method, shift_binary_data = analyze_single_file(file_path, only_hard_classes, dataset)
                 
                 if shift_metrics:
                     all_data[f"{dataset}_{model}"] = {
@@ -417,7 +502,8 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
                         'filename': filename,
                         'extraction_method': extraction_method,
                         'dataset': dataset,
-                        'model': model
+                        'model': model,
+                        'shift_binary_data': shift_binary_data
                     }
                     print(f"  ✓ Loaded data for {dataset} - {model}")
                 else:
@@ -455,14 +541,32 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
         for key, data in dataset_data.items():
             model = data['model']
             shift_metrics = data['shift_metrics']
+            shift_binary_data = data['shift_binary_data']
             extraction_method = data.get('extraction_method', 'rule-based')
             
             accuracies = []
+            errors_lower = []
+            errors_upper = []
+            
             for shift in ['shift_1', 'shift_2', 'shift_3', 'shift_4']:
-                if shift in shift_metrics:
-                    accuracies.append(shift_metrics[shift]['accuracy'])
+                if shift in shift_metrics and shift in shift_binary_data:
+                    # Calculate confidence interval for this shift
+                    predictions = shift_binary_data[shift]['predictions']
+                    targets = shift_binary_data[shift]['targets']
+                    
+                    if predictions and targets:
+                        accuracy, lo, hi = calculate_confidence_interval(predictions, targets, method=ci_method)
+                        accuracies.append(accuracy)
+                        errors_lower.append(accuracy - lo)
+                        errors_upper.append(hi - accuracy)
+                    else:
+                        accuracies.append(0.0)
+                        errors_lower.append(0.0)
+                        errors_upper.append(0.0)
                 else:
                     accuracies.append(0.0)
+                    errors_lower.append(0.0)
+                    errors_upper.append(0.0)
             
             # Create label with model and extraction method
             if extraction_method and extraction_method != 'rule-based' and 'gemma3' not in extraction_method:
@@ -481,6 +585,7 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
             color = COLORS[color_idx % len(COLORS)]
             marker = MARKERS[color_idx % len(MARKERS)]
             
+            # Plot line with markers
             plt.plot(shifts, accuracies, 
                     marker='o', 
                     linewidth=2, 
@@ -488,6 +593,17 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
                     color=color,
                     label=label,
                     zorder=3)
+            
+            # Plot error bars separately
+            plt.errorbar(shifts, accuracies,
+                        yerr=[errors_lower, errors_upper],
+                        fmt='none',
+                        color=color,
+                        capsize=3,
+                        capthick=1,
+                        elinewidth=1.1,
+                        alpha=0.7,
+                        zorder=2)
             
             # Value labels removed for cleaner visualization
             
@@ -527,7 +643,12 @@ def create_separate_charts(data_dir="handsup_evals", output_prefix="handsup", on
         # Customize the chart
         plt.xlabel("Look-ahead, steps", fontsize=12)
         plt.ylabel("Exact match", fontsize=12)
-        # plt.ylim(0, 1.0)
+        if data['dataset'] == 'r1s7T5':
+            plt.ylim(0.0, 1.0)
+        elif data['dataset'] == 'r2s20T10':
+            plt.ylim(0.0, 0.1)
+        else:
+            raise ValueError(f"Unknown dataset: {data['dataset']}")
         
         # Customize axes
         plt.xticks([1, 2, 3, 4], fontsize=12)
@@ -588,6 +709,8 @@ if __name__ == "__main__":
                        help=f'Datasets to include (default: {DATASETS})')
     parser.add_argument('--only_hard_classes', action='store_true',
                        help='Filter to only include samples with Wolfram complexity classes 3 or 4')
+    parser.add_argument('--ci_method', type=str, choices=['wilson', 'bootstrap'], default='bootstrap',
+                       help='Confidence interval method: wilson (default) or bootstrap')
     
     args = parser.parse_args()
     
@@ -601,5 +724,5 @@ if __name__ == "__main__":
     print(f"Output file: {args.output}")
     print(f"Only hard classes: {args.only_hard_classes}")
     
-    create_separate_charts(args.data_dir, args.output.replace('.pdf', ''), args.only_hard_classes)
+    create_separate_charts(args.data_dir, args.output.replace('.pdf', ''), args.only_hard_classes, args.ci_method)
 
